@@ -5,7 +5,7 @@
 
 
 int main() {
-  printf(1 , "No. of Process: %d \n" , getNumProc());
+  printf(1 , "No. of Process: %d \n" , getprocs());
   exit();
  }
 

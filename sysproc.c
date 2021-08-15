@@ -92,7 +92,7 @@ sys_uptime(void)
 
 
 int
-sys_getNumProc(void)
+sys_getprocs(void)
 {
-  return getNumProc();
+  return getprocs();
 }
