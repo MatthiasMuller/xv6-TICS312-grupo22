@@ -38,10 +38,10 @@ struct cpu*
 mycpu(void)
 {
   int apicid, i;
-  
+
   if(readeflags()&FL_IF)
     panic("mycpu called with interrupts enabled\n");
-  
+
   apicid = lapicid();
   // APIC IDs are not guaranteed to be contiguous. Maybe we should have
   // a reverse map, or reserve a register to store &cpus[i].
@@ -88,6 +88,7 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->tickets=2;
 
   release(&ptable.lock);
 
@@ -124,7 +125,7 @@ userinit(void)
   extern char _binary_initcode_start[], _binary_initcode_size[];
 
   p = allocproc();
-  
+
   initproc = p;
   if((p->pgdir = setupkvm()) == 0)
     panic("userinit: out of memory?");
@@ -275,7 +276,7 @@ wait(void)
   struct proc *p;
   int havekids, pid;
   struct proc *curproc = myproc();
-  
+
   acquire(&ptable.lock);
   for(;;){
     // Scan through table looking for exited children.
@@ -311,6 +312,26 @@ wait(void)
   }
 }
 
+static
+unsigned long
+lcg_rand(unsigned long a)
+{
+    unsigned long b=279470273, c=4294967291;
+    return(a*b) % c;
+}
+
+int lotteryTotal(void){
+    struct proc *p;
+    int total_tickets=0;
+
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->state==RUNNABLE){
+            total_tickets+=p->tickets;
+        }
+    }
+    return total_tickets;
+}
+
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
@@ -325,36 +346,53 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
+  int total_tickets, runval=0;
+  int chosen;
+
   for(;;){
+    runval++;
     // Enable interrupts on this processor.
     sti();
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+    total_tickets=lotteryTotal();
+    if(total_tickets>0){
+      //encuentra el winner usando LCGRnadom
+      chosen=lcg_rand(lcg_rand(runval*ticks));
+      if(total_tickets < chosen){
+        chosen%= total_tickets; //el elegido esrta en el intervalo de ticks
+      }
+      //bucle para recorrer provesos busanco uno para ejecutar
 
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
+
+      for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->state == RUNNABLE)
+          chosen-=p->tickets;
+        if(p->state != RUNNABLE || chosen >=0)
+          continue;
+
+        // Switch to chosen process.  It is the process's job
+        // to release ptable.lock and then reacquire it
+        // before jumping back to us.
+        cprintf("el proceso %d esta ahora en la CPU.\n", p->pid);
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
+
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
-      c->proc = 0;
+        c->proc = 0;
+      }
+
     }
     release(&ptable.lock);
-
   }
 }
-
 // Enter scheduler.  Must hold only ptable.lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this
@@ -418,7 +456,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
-  
+
   if(p == 0)
     panic("sleep");
 
